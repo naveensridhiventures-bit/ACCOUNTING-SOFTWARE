@@ -1,0 +1,19 @@
+{
+  "name": "ledgerly",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Ledgerly: double-entry accounting, GST invoicing, inventory and reports for running a company",
+  "scripts": {
+    "install:all": "npm install && npm install --prefix backend && npm install --prefix frontend",
+    "dev": "concurrently -n api,web -c green,cyan \"npm run dev --prefix backend\" \"npm run dev --prefix frontend\"",
+    "build": "npm run build --prefix backend && npm run build --prefix frontend",
+    "migrate": "npm run migrate:deploy --prefix backend",
+    "seed": "npm run seed --prefix backend",
+    "seed:demo": "npm run seed:demo --prefix backend",
+    "typecheck": "npm run typecheck --prefix backend && npm run typecheck --prefix frontend",
+    "test": "npm test --prefix backend"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.1"
+  }
+}

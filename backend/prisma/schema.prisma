@@ -1,0 +1,522 @@
+generator client {
+  provider   = "prisma-client-js"
+  engineType = "client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum AccountNature {
+  ASSET
+  LIABILITY
+  INCOME
+  EXPENSE
+}
+
+enum EntrySide {
+  DR
+  CR
+}
+
+enum VoucherType {
+  SALES
+  PURCHASE
+  PAYMENT
+  RECEIPT
+  CONTRA
+  JOURNAL
+  CREDIT_NOTE
+  DEBIT_NOTE
+}
+
+enum VoucherStatus {
+  POSTED
+  REVERSED
+}
+
+enum PartyType {
+  CUSTOMER
+  SUPPLIER
+}
+
+enum ProductKind {
+  GOODS
+  SERVICE
+}
+
+enum DocType {
+  SALES_INVOICE
+  PURCHASE_BILL
+  CREDIT_NOTE
+  DEBIT_NOTE
+}
+
+enum DocStatus {
+  ACTIVE
+  CANCELLED
+}
+
+enum PaymentDirection {
+  RECEIVED
+  PAID
+}
+
+enum PaymentMode {
+  CASH
+  BANK
+  UPI
+  CARD
+  CHEQUE
+  OTHER
+}
+
+enum StockMoveType {
+  OPENING
+  PURCHASE
+  SALE
+  SALE_RETURN
+  PURCHASE_RETURN
+  ADJUSTMENT_IN
+  ADJUSTMENT_OUT
+}
+
+model Company {
+  id           String   @id @default(uuid())
+  name         String
+  gstin        String?
+  baseCurrency String   @default("INR")
+  settings     Json     @default("{}")
+  legalName    String?
+  pan          String?
+  address      String?
+  city         String?
+  state        String?
+  stateCode    String?
+  pincode      String?
+  phone        String?
+  email        String?
+  website      String?
+  bankDetails  String?
+  invoiceTerms String?
+  /// Per voucher type number prefix overrides, e.g. {"SALES":"INV"}
+  numberPrefixes     Json    @default("{}")
+  gstEnabled         Boolean @default(true)
+  allowNegativeStock Boolean @default(false)
+  roundOffInvoices   Boolean @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  roles            Role[]
+  users            User[]
+  financialYears   FinancialYear[]
+  accountGroups    AccountGroup[]
+  ledgers          Ledger[]
+  vouchers         Voucher[]
+  voucherSequences VoucherSequence[]
+  auditLogs        AuditLog[]
+  parties          Party[]
+  products         Product[]
+  documents        Document[]
+  payments         Payment[]
+  allocations      Allocation[]
+  stockMovements   StockMovement[]
+  bankReconciliations BankReconciliation[]
+}
+
+model Role {
+  id          String   @id @default(uuid())
+  companyId   String
+  name        String
+  permissions String[]
+  isSystem    Boolean  @default(false)
+
+  company Company @relation(fields: [companyId], references: [id])
+  users   User[]
+
+  @@unique([companyId, name])
+}
+
+model User {
+  id           String    @id @default(uuid())
+  companyId    String
+  roleId       String
+  email        String    @unique
+  name         String
+  passwordHash String
+  isActive     Boolean   @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  company  Company   @relation(fields: [companyId], references: [id])
+  role     Role      @relation(fields: [roleId], references: [id])
+  vouchers Voucher[]
+
+  @@index([companyId])
+}
+
+model FinancialYear {
+  id        String   @id @default(uuid())
+  companyId String
+  name      String
+  startDate DateTime @db.Date
+  endDate   DateTime @db.Date
+  isClosed  Boolean  @default(false)
+
+  company   Company           @relation(fields: [companyId], references: [id])
+  vouchers  Voucher[]
+  sequences VoucherSequence[]
+
+  @@unique([companyId, name])
+  @@index([companyId, startDate, endDate])
+}
+
+model AccountGroup {
+  id        String        @id @default(uuid())
+  companyId String
+  parentId  String?
+  name      String
+  nature    AccountNature
+  isSystem  Boolean       @default(false)
+
+  company  Company        @relation(fields: [companyId], references: [id])
+  parent   AccountGroup?  @relation("GroupTree", fields: [parentId], references: [id])
+  children AccountGroup[] @relation("GroupTree")
+  ledgers  Ledger[]
+
+  @@unique([companyId, name])
+  @@index([parentId])
+}
+
+model Ledger {
+  id             String    @id @default(uuid())
+  companyId      String
+  groupId        String
+  name           String
+  code           String?
+  /// Opening balance as an absolute amount; direction is in openingSide.
+  openingBalance Decimal   @default(0) @db.Decimal(18, 2)
+  openingSide    EntrySide @default(DR)
+  isActive       Boolean   @default(true)
+  isSystem       Boolean   @default(false)
+  /// Stable identifier for ledgers the system posts to automatically (e.g. SALES, OUTPUT_CGST).
+  systemKey      String?
+  description    String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  company Company       @relation(fields: [companyId], references: [id])
+  group   AccountGroup  @relation(fields: [groupId], references: [id])
+  lines   VoucherLine[]
+  party   Party?
+
+  @@unique([companyId, name])
+  @@unique([companyId, systemKey])
+  @@index([groupId])
+}
+
+model Voucher {
+  id              String        @id @default(uuid())
+  companyId       String
+  financialYearId String
+  type            VoucherType
+  number          String
+  date            DateTime      @db.Date
+  narration       String?
+  totalAmount     Decimal       @db.Decimal(18, 2)
+  status          VoucherStatus @default(POSTED)
+  /// Set on a reversal voucher: the voucher it cancels out.
+  reversesId      String?       @unique
+  /// Free reference such as cheque number, UTR or supplier invoice number.
+  reference       String?
+  /// Origin of the voucher: INVOICE, PAYMENT, EXPENSE, ADJUSTMENT, OPENING, CLOSING, MANUAL.
+  source          String?
+  createdById     String
+  createdAt       DateTime      @default(now())
+
+  company       Company       @relation(fields: [companyId], references: [id])
+  financialYear FinancialYear @relation(fields: [financialYearId], references: [id])
+  createdBy     User          @relation(fields: [createdById], references: [id])
+  reverses      Voucher?      @relation("Reversal", fields: [reversesId], references: [id])
+  reversedBy    Voucher?      @relation("Reversal")
+  lines         VoucherLine[]
+  document      Document?
+  payment       Payment?
+
+  @@unique([companyId, financialYearId, type, number])
+  @@index([companyId, date])
+  @@index([financialYearId])
+}
+
+model VoucherLine {
+  id        String    @id @default(uuid())
+  voucherId String
+  ledgerId  String
+  lineNo    Int
+  side      EntrySide
+  amount    Decimal   @db.Decimal(18, 2)
+  narration String?
+
+  voucher        Voucher             @relation(fields: [voucherId], references: [id])
+  ledger         Ledger              @relation(fields: [ledgerId], references: [id])
+  reconciliation BankReconciliation?
+
+  @@unique([voucherId, lineNo])
+  @@index([voucherId])
+  @@index([ledgerId])
+}
+
+model VoucherSequence {
+  companyId       String
+  financialYearId String
+  type            VoucherType
+  lastNumber      Int         @default(0)
+
+  company       Company       @relation(fields: [companyId], references: [id])
+  financialYear FinancialYear @relation(fields: [financialYearId], references: [id])
+
+  @@id([companyId, financialYearId, type])
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  companyId String
+  userId    String?
+  action    String
+  entity    String
+  entityId  String
+  data      Json?
+  createdAt DateTime @default(now())
+
+  company Company @relation(fields: [companyId], references: [id])
+
+  @@index([companyId, createdAt])
+  @@index([entity, entityId])
+}
+
+model Party {
+  id             String    @id @default(uuid())
+  companyId      String
+  ledgerId       String    @unique
+  type           PartyType
+  name           String
+  gstin          String?
+  pan            String?
+  phone          String?
+  email          String?
+  contactPerson  String?
+  billingAddress String?
+  city           String?
+  state          String?
+  stateCode      String?
+  pincode        String?
+  creditDays     Int       @default(0)
+  creditLimit    Decimal?  @db.Decimal(18, 2)
+  notes          String?
+  isActive       Boolean   @default(true)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  company   Company    @relation(fields: [companyId], references: [id])
+  ledger    Ledger     @relation(fields: [ledgerId], references: [id])
+  documents Document[]
+  payments  Payment[]
+
+  @@unique([companyId, name])
+  @@index([companyId, type])
+}
+
+model Product {
+  id            String      @id @default(uuid())
+  companyId     String
+  sku           String
+  name          String
+  kind          ProductKind @default(GOODS)
+  category      String?
+  hsn           String?
+  unit          String      @default("Nos")
+  salePrice     Decimal     @default(0) @db.Decimal(18, 2)
+  purchasePrice Decimal     @default(0) @db.Decimal(18, 2)
+  gstRate       Decimal     @default(0) @db.Decimal(5, 2)
+  trackStock    Boolean     @default(true)
+  reorderLevel  Decimal     @default(0) @db.Decimal(18, 3)
+  /// Running stock position (maintained transactionally with every StockMovement).
+  onHandQty     Decimal     @default(0) @db.Decimal(18, 3)
+  onHandValue   Decimal     @default(0) @db.Decimal(18, 2)
+  description   String?
+  isActive      Boolean     @default(true)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  company   Company         @relation(fields: [companyId], references: [id])
+  lines     DocumentLine[]
+  movements StockMovement[]
+
+  @@unique([companyId, sku])
+  @@unique([companyId, name])
+  @@index([companyId, isActive])
+}
+
+model Document {
+  id                 String    @id @default(uuid())
+  companyId          String
+  type               DocType
+  number             String
+  date               DateTime  @db.Date
+  dueDate            DateTime? @db.Date
+  partyId            String
+  voucherId          String    @unique
+  reference          String?
+  placeOfSupply      String?
+  placeOfSupplyCode  String?
+  isInterState       Boolean   @default(false)
+  subtotal           Decimal   @db.Decimal(18, 2)
+  discountTotal      Decimal   @db.Decimal(18, 2)
+  taxableTotal       Decimal   @db.Decimal(18, 2)
+  cgstTotal          Decimal   @db.Decimal(18, 2)
+  sgstTotal          Decimal   @db.Decimal(18, 2)
+  igstTotal          Decimal   @db.Decimal(18, 2)
+  roundOff           Decimal   @default(0) @db.Decimal(18, 2)
+  total              Decimal   @db.Decimal(18, 2)
+  notes              String?
+  terms              String?
+  originalDocumentId String?
+  status             DocStatus @default(ACTIVE)
+  cancelledAt        DateTime?
+  cancelReason       String?
+  createdById        String
+  createdAt          DateTime  @default(now())
+
+  company          Company        @relation(fields: [companyId], references: [id])
+  party            Party          @relation(fields: [partyId], references: [id])
+  voucher          Voucher        @relation(fields: [voucherId], references: [id])
+  originalDocument Document?      @relation("DocLink", fields: [originalDocumentId], references: [id])
+  linkedDocuments  Document[]     @relation("DocLink")
+  lines            DocumentLine[]
+  allocations      Allocation[]   @relation("AllocTarget")
+  creditAllocations Allocation[]  @relation("AllocCredit")
+  movements        StockMovement[]
+
+  @@index([companyId, type, date])
+  @@index([partyId])
+}
+
+model DocumentLine {
+  id            String   @id @default(uuid())
+  documentId    String
+  lineNo        Int
+  productId     String?
+  /// Optional override of the income/expense ledger this line posts to.
+  ledgerId      String?
+  description   String
+  hsn           String?
+  unit          String?
+  qty           Decimal  @db.Decimal(18, 3)
+  rate          Decimal  @db.Decimal(18, 2)
+  discountPct   Decimal  @default(0) @db.Decimal(5, 2)
+  discountAmount Decimal @default(0) @db.Decimal(18, 2)
+  taxableAmount Decimal  @db.Decimal(18, 2)
+  gstRate       Decimal  @default(0) @db.Decimal(5, 2)
+  cgstAmount    Decimal  @default(0) @db.Decimal(18, 2)
+  sgstAmount    Decimal  @default(0) @db.Decimal(18, 2)
+  igstAmount    Decimal  @default(0) @db.Decimal(18, 2)
+  lineTotal     Decimal  @db.Decimal(18, 2)
+  /// Inventory value moved by this line (cost of goods sold, or stock value purchased/returned).
+  costAmount    Decimal  @default(0) @db.Decimal(18, 2)
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  product  Product? @relation(fields: [productId], references: [id])
+
+  @@unique([documentId, lineNo])
+  @@index([productId])
+}
+
+model Payment {
+  id          String           @id @default(uuid())
+  companyId   String
+  voucherId   String           @unique
+  partyId     String
+  direction   PaymentDirection
+  mode        PaymentMode      @default(BANK)
+  amount      Decimal          @db.Decimal(18, 2)
+  date        DateTime         @db.Date
+  reference   String?
+  /// Cash or bank ledger the money moved through.
+  accountId   String
+  notes       String?
+  status      DocStatus        @default(ACTIVE)
+  createdById String
+  createdAt   DateTime         @default(now())
+
+  company     Company      @relation(fields: [companyId], references: [id])
+  party       Party        @relation(fields: [partyId], references: [id])
+  voucher     Voucher      @relation(fields: [voucherId], references: [id])
+  allocations Allocation[]
+
+  @@index([companyId, date])
+  @@index([partyId])
+}
+
+model Allocation {
+  id               String   @id @default(uuid())
+  companyId        String
+  /// The invoice / bill being settled.
+  documentId       String
+  /// Settled by a payment...
+  paymentId        String?
+  /// ...or by a credit / debit note.
+  creditDocumentId String?
+  amount           Decimal  @db.Decimal(18, 2)
+  createdAt        DateTime @default(now())
+
+  company        Company   @relation(fields: [companyId], references: [id])
+  document       Document  @relation("AllocTarget", fields: [documentId], references: [id])
+  payment        Payment?  @relation(fields: [paymentId], references: [id])
+  creditDocument Document? @relation("AllocCredit", fields: [creditDocumentId], references: [id])
+
+  @@index([documentId])
+  @@index([paymentId])
+  @@index([creditDocumentId])
+}
+
+model StockMovement {
+  id           String        @id @default(uuid())
+  companyId    String
+  productId    String
+  date         DateTime      @db.Date
+  type         StockMoveType
+  /// Signed: positive = stock in, negative = stock out.
+  qty          Decimal       @db.Decimal(18, 3)
+  value        Decimal       @db.Decimal(18, 2)
+  balanceQty   Decimal       @db.Decimal(18, 3)
+  balanceValue Decimal       @db.Decimal(18, 2)
+  documentId   String?
+  voucherId    String?
+  note         String?
+  createdById  String
+  createdAt    DateTime      @default(now())
+
+  company  Company   @relation(fields: [companyId], references: [id])
+  product  Product   @relation(fields: [productId], references: [id])
+  document Document? @relation(fields: [documentId], references: [id])
+
+  @@index([companyId, productId, date])
+  @@index([documentId])
+}
+
+model BankReconciliation {
+  id            String   @id @default(uuid())
+  companyId     String
+  ledgerId      String
+  voucherLineId String   @unique
+  bankDate      DateTime @db.Date
+  createdById   String
+  createdAt     DateTime @default(now())
+
+  company     Company     @relation(fields: [companyId], references: [id])
+  voucherLine VoucherLine @relation(fields: [voucherLineId], references: [id])
+
+  @@index([companyId, ledgerId])
+}
